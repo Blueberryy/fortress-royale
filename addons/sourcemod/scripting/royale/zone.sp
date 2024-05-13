@@ -16,7 +16,7 @@
  */
 
 #define ZONE_MODEL			"models/kirillian/brsphere_huge_v3.mdl"
-#define ZONE_SHRINK_SOUND	"MVM.Siren"
+#define ZONE_SHRINK_SOUND	"MVM.Warning"
 #define ZONE_DIAMETER		20000.0
 
 #define ZONE_FADE_START_RATIO	0.95
@@ -398,9 +398,14 @@ public Action Timer_Bleed(Handle timer)
 		{
 			player.ZoneDamageTicks++;
 			
+			//No bottles from zone deaths (SDKHooks_TakeDamage skips hooks)
+			SetBottlePoints(0);
+			
 			//CTFPlayer::OnTakeDamage has a local bool that allows damage to bypass invulnerability
 			//It is only set to true for telefrags and if the attacker is a trigger_hurt entity with FSOLID_TRIGGER, so we pass our own trigger
 			SDKHooks_TakeDamage(client, 0, g_TriggerHurtRef, Zone_GetCurrentDamage() * player.ZoneDamageTicks * fr_zone_damagemultiplier.FloatValue, DMG_PREVENT_PHYSICS_FORCE);
+			
+			SetBottlePoints(fr_bottle_points.IntValue);
 		}
 	}
 	

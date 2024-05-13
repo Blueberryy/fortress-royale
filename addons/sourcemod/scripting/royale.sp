@@ -20,16 +20,18 @@
 #include <sdkhooks>
 #include <tf2_stocks>
 #include <tf_econ_data>
+#include <tf2attributes>
 #include <dhooks>
 
 #undef REQUIRE_EXTENSIONS
 #tryinclude <tf2items>
+#tryinclude <loadsoundscript>
 #define REQUIRE_EXTENSIONS
 
 #pragma semicolon 1
 #pragma newdecls required
 
-#define TF_MAXPLAYERS	32
+#define TF_MAXPLAYERS	33
 
 #define MAX_MESSAGE_LENGTH	192
 
@@ -37,6 +39,12 @@
 #define CONTENTS_BLUETEAM	CONTENTS_TEAM2
 
 #define MODEL_EMPTY			"models/empty.mdl"
+
+#define BOTTLE_PICKUP_MODEL		"models/props_watergate/bottle_pickup.mdl"
+#define BOTTLE_PICKUP_MATERIAL	"materials/models/props_watergate/alien_beer_bottle.vmt"
+#define BOTTLE_PICKUP_TEXTURE	"materials/models/props_watergate/alien_beer_bottle.vtf"
+#define BOTTLE_DROP_SOUND		"vo/watergate/drop_beer.mp3"
+#define BOTTLE_PICKUP_SOUND		"vo/watergate/pickup_beer.mp3"
 
 #define CONFIG_MAXCHAR		256
 
@@ -177,6 +185,14 @@ enum HudNotification_t
 	//
 
 	NUM_STOCK_NOTIFICATIONS
+}
+
+enum VehicleType
+{
+	VEHICLE_TYPE_CAR_WHEELS = (1 << 0), 
+	VEHICLE_TYPE_CAR_RAYCAST = (1 << 1), 
+	VEHICLE_TYPE_JETSKI_RAYCAST = (1 << 2), 
+	VEHICLE_TYPE_AIRBOAT_RAYCAST = (1 << 3)
 }
 
 enum FRRoundState
@@ -428,18 +444,23 @@ TFCond g_RuneConds[] = {
 
 bool g_Enabled;
 bool g_TF2Items;
-bool g_WeaponSwitch;
+bool g_LoadSoundscript;
 bool g_ChangeTeamSilent;
 FRRoundState g_RoundState;
 int g_PlayerCount;
+int g_PlayerDestructionLogic = INVALID_ENT_REFERENCE;
 
 StringMap g_PrecacheWeapon;	//List of custom models precached by defindex
 
 ConVar fr_enable;
-ConVar fr_health[view_as<int>(TFClass_Engineer)+1];
+ConVar fr_class_health[view_as<int>(TFClass_Engineer) + 1];
+ConVar fr_obj_health[view_as<int>(TFObject_Sapper) + 1];
 ConVar fr_fistsdamagemultiplier;
 ConVar fr_sectodeployparachute;
 ConVar fr_classfilter;
+ConVar fr_randomclass;
+ConVar fr_bottle_points;
+ConVar fr_multiwearable;
 
 ConVar fr_zone_startdisplay;
 ConVar fr_zone_startdisplay_player;
@@ -450,6 +471,9 @@ ConVar fr_zone_shrink_player;
 ConVar fr_zone_nextdisplay;
 ConVar fr_zone_nextdisplay_player;
 ConVar fr_zone_damagemultiplier;
+
+ConVar fr_vehicle_passenger_damagemultiplier;
+ConVar fr_vehicle_lock_speed;
 
 ConVar fr_truce_duration;
 
@@ -471,8 +495,8 @@ int g_OffsetNextSpell;
 #include "royale/loot/loot_callbacks.sp"
 #include "royale/loot/loot.sp"
 
-#include "royale/vehicles/vehicles.sp"
 #include "royale/vehicles/vehicles_config.sp"
+#include "royale/vehicles/vehicles.sp"
 
 #include "royale/battlebus.sp"
 #include "royale/command.sp"
@@ -503,6 +527,7 @@ public void OnPluginStart()
 	LoadTranslations("royale.phrases");
 	
 	g_TF2Items = LibraryExists("TF2Items");
+	g_LoadSoundscript = LibraryExists("LoadSoundscript");
 	
 	g_PrecacheWeapon = new StringMap();
 	
@@ -539,6 +564,11 @@ public void OnPluginStart()
 	}
 }
 
+public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max)
+{
+	MarkNativeAsOptional("LoadSoundScript");
+}
+
 void Enable()
 {
 	Config_Refresh();
@@ -571,8 +601,6 @@ void Disable()
 			DHook_UnhookClient(client);
 			DHook_UnhookGiveNamedItem(client);
 			SDKHook_UnhookClient(client);
-			
-			Vehicles_ExitVehicle(client);
 		}
 	}
 	
@@ -623,6 +651,13 @@ public void OnMapStart()
 	
 	RefreshEnable();
 	
+	//Player destruction logic handles precaching
+	AddModelToDownloadsTable(BOTTLE_PICKUP_MODEL);
+	AddFileToDownloadsTable(BOTTLE_PICKUP_MATERIAL);
+	AddFileToDownloadsTable(BOTTLE_PICKUP_TEXTURE);
+	AddSoundToDownloadsTable(BOTTLE_DROP_SOUND);
+	AddSoundToDownloadsTable(BOTTLE_PICKUP_SOUND);
+	
 	BattleBus_Precache();
 	Truce_Precache();
 	Zone_Precache();
@@ -642,6 +677,10 @@ public void OnLibraryAdded(const char[] name)
 		//We cant allow TF2Items load while GiveNamedItem already hooked due to crash
 		if (DHook_IsGiveNamedItemActive())
 			SetFailState("Do not load TF2Items midgame while Royale is already loaded!");
+	} 
+	else if (StrEqual(name, "LoadSoundscript"))
+	{
+		g_LoadSoundscript = true;
 	}
 }
 
@@ -656,6 +695,10 @@ public void OnLibraryRemoved(const char[] name)
 			for (int iClient = 1; iClient <= MaxClients; iClient++)
 				if (IsClientInGame(iClient))
 					DHook_HookGiveNamedItem(iClient);
+	}
+	else if (StrEqual(name, "LoadSoundscript"))
+	{
+		g_LoadSoundscript = false;
 	}
 }
 
@@ -673,30 +716,44 @@ public void OnClientPutInServer(int client)
 	FRPlayer(client).VisibleCond = 0;
 }
 
-public void OnClientDisconnect(int client)
-{
-	if (!g_Enabled)
-		return;
-	
-	Vehicles_ExitVehicle(client);
-}
-
 public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3], float angles[3], int &weapon, int &subtype, int &cmdnum, int &tickcount, int &seed, int mouse[2])
 {
 	if (!g_Enabled)
 		return;
 	
-	if (FRPlayer(client).PlayerState == PlayerState_BattleBus)
+	//Scout falling damage immunity
+	GameRules_SetProp("m_bPowerupMode", true);
+	
+	if (FRPlayer(client).PlayerState == PlayerState_BattleBus && BattleBus_AllowedToDrop())
 	{
 		if (buttons & IN_ATTACK3)
 			BattleBus_EjectClient(client);
 		else
-			buttons = 0;	//Don't allow client in battle bus process any other buttons
+			buttons = 0;	//Don't allow player in battle bus to press any other buttons
 	}
-	else if ((buttons & IN_ATTACK || buttons & IN_ATTACK2))
+	else if (buttons & IN_JUMP && FRPlayer(client).PlayerState == PlayerState_Parachute && TF2_IsPlayerInCondition(client, TFCond_Parachute) && BattleBus_IsActive())
+	{
+		//Don't allow closing parachute while battle bus is still active
+		buttons &= ~IN_JUMP;
+	}
+	else if (buttons & IN_ATTACK || buttons & IN_ATTACK2)
 	{
 		TF2_TryToPickupDroppedWeapon(client);
 	}
+	
+	if (FRPlayer(client).InUse)
+	{
+		FRPlayer(client).InUse = false;
+		buttons |= IN_USE;
+	}
+}
+
+public void OnPlayerRunCmdPost(int client, int buttons, int impulse, const float vel[3], const float angles[3], int weapon, int subtype, int cmdnum, int tickcount, int seed, const int mouse[2])
+{
+	if (!g_Enabled)
+		return;
+	
+	GameRules_SetProp("m_bPowerupMode", false);
 }
 
 public Action OnClientCommandKeyValues(int client, KeyValues kv)
@@ -732,8 +789,6 @@ public void OnGameFrame()
 	if (!g_Enabled)
 		return;
 	
-	Vehicles_OnGameFrame();
-	
 	switch (g_RoundState)
 	{
 		case FRRoundState_Waiting: TryToStartRound();
@@ -757,6 +812,7 @@ public void OnEntityDestroyed(int entity)
 	
 	if (0 < entity < 2048)
 	{
+		BattleBus_OnEntityDestroyed(entity);
 		Loot_OnEntityDestroyed(entity);
 		Vehicles_OnEntityDestroyed(entity);
 		FREntity.Destroy(entity);
@@ -800,7 +856,7 @@ public void TF2_OnConditionAdded(int client, TFCond condition)
 	if (condition == TFCond_Disguising)
 		SetEntProp(client, Prop_Send, "m_nDesiredDisguiseTeam", TF2_GetClientTeam(client));
 	
-	if (TF2_IsRuneCondition(condition))
+	if (TF2_IsRuneCondition(condition) && TF2_GetPlayerClass(client) != TFClass_Spy)
 		SetEntProp(client, Prop_Send, "m_bGlowEnabled", true);
 }
 
@@ -820,7 +876,7 @@ public void TF2_OnConditionRemoved(int client, TFCond condition)
 		if (condition == g_VsibleConds[i])
 			FRPlayer(client).VisibleCond--;
 	
-	if (TF2_IsRuneCondition(condition))
+	if (TF2_IsRuneCondition(condition) && TF2_GetPlayerClass(client) != TFClass_Spy)
 		SetEntProp(client, Prop_Send, "m_bGlowEnabled", false);
 }
 
@@ -856,6 +912,15 @@ bool TryToStartRound()
 	return true;
 }
 
+void SetBottlePoints(int value)
+{
+	if (IsValidEntity(g_PlayerDestructionLogic))
+	{
+		SetVariantInt(value);
+		AcceptEntityInput(g_PlayerDestructionLogic, "SetPointsOnPlayerDeath");
+	}
+}
+
 public Action EntOutput_SetupFinished(const char[] output, int caller, int activator, float delay)
 {
 	RemoveEntity(caller);
@@ -876,8 +941,10 @@ public Action EntOutput_SetupFinished(const char[] output, int caller, int activ
 	
 	g_PlayerCount = GetAlivePlayersCount();
 	
-	Zone_SetupFinished();
+	
 	Loot_SetupFinished();
+	Vehicles_SetupFinished();
+	Zone_SetupFinished();
 }
 
 void TryToEndRound()

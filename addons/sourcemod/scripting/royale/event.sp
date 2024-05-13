@@ -101,6 +101,24 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 	if (GameRules_GetProp("m_bInWaitingForPlayers"))
 		return;
 	
+	//Create player destruction logic for Demoman beer mechanic
+	int logic = CreateEntityByName("tf_logic_player_destruction");
+	if (IsValidEntity(logic))
+	{
+		DispatchKeyValue(logic, "prop_model_name", BOTTLE_PICKUP_MODEL);
+		DispatchKeyValue(logic, "prop_drop_sound", BOTTLE_DROP_SOUND);
+		DispatchKeyValue(logic, "prop_pickup_sound", BOTTLE_PICKUP_SOUND);
+		DispatchKeyValue(logic, "flag_reset_delay", "30");
+		SetEntProp(logic, Prop_Data, "m_nPointsPerPlayer", fr_bottle_points.IntValue + 1);	//Make sure the logic never fires PD win condition
+		
+		if (DispatchSpawn(logic))
+		{
+			g_PlayerDestructionLogic = EntIndexToEntRef(logic);
+			
+			SetBottlePoints(fr_bottle_points.IntValue);
+		}
+	}
+	
 	//Stop previous round end music
 	EmitGameSoundToAll(GAMESOUND_WIN_MUSIC, _, SND_STOPLOOPING);
 	EmitGameSoundToAll(GAMESOUND_LOSE_MUSIC, _, SND_STOPLOOPING);
@@ -125,7 +143,6 @@ public Action Event_RoundStart(Event event, const char[] name, bool dontBroadcas
 	
 	Zone_RoundStart();	//Reset zone pos
 	BattleBus_NewPos();	//Calculate pos from zone's restarted pos
-	Vehicles_RoundStart();
 }
 
 public Action Event_SetupFinished(Event event, const char[] name, bool dontBroadcast)
@@ -336,7 +353,6 @@ public Action Event_PlayerDeath(Event event, const char[] name, bool dontBroadca
 		//Drop small health kit
 		TF2_DropItem(victim, "item_healthkit_small");
 		
-		Vehicles_ExitVehicle(victim);
 		FRPlayer(victim).PlayerState = PlayerState_Dead;
 		CreateTimer(0.5, Timer_SetClientDead, GetClientSerial(victim));
 	}

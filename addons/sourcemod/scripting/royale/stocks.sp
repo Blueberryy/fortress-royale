@@ -79,48 +79,6 @@ stock void ModelIndexToString(int index, char[] model, int size)
 	ReadStringTable(table, index, model, size);
 }
 
-stock void AnglesToVelocity(const float angles[3], float velocity[3], float speed = 1.0)
-{
-	velocity[0] = Cosine(DegToRad(angles[1]));
-	velocity[1] = Sine(DegToRad(angles[1]));
-	velocity[2] = Sine(DegToRad(angles[0])) * -1.0;
-	
-	NormalizeVector(velocity, velocity);
-	
-	ScaleVector(velocity, speed);
-}
-
-stock void RotateVector(const float vector[3], const float angles[3], float result[3])
-{
-	float rad[3];
-	rad[0] = DegToRad(angles[2]);
-	rad[1] = DegToRad(angles[0]);
-	rad[2] = DegToRad(angles[1]);
-	
-	float cosAlpha = Cosine(rad[0]);
-	float sinAlpha = Sine(rad[0]);
-	float cosBeta = Cosine(rad[1]);
-	float sinBeta = Sine(rad[1]);
-	float cosGamma = Cosine(rad[2]);
-	float sinGamma = Sine(rad[2]);
-	
-	// 3D rotation matrix
-	result = vector;
-	
-	float buffer[3];
-	buffer = result;
-	result[1] = cosAlpha*buffer[1] - sinAlpha*buffer[2];
-	result[2] = cosAlpha*buffer[2] + sinAlpha*buffer[1];
-	
-	buffer = result;
-	result[0] = cosBeta*buffer[0] + sinBeta*buffer[2];
-	result[2] = cosBeta*buffer[2] - sinBeta*buffer[0];
-	
-	buffer = result;
-	result[0] = cosGamma*buffer[0] - sinGamma*buffer[1];
-	result[1] = cosGamma*buffer[1] + sinGamma*buffer[0];
-}
-
 stock void StringToVector(const char[] string, float vector[3])
 {
 	char buffer[3][16];
@@ -133,131 +91,6 @@ stock void StringToVector(const char[] string, float vector[3])
 stock void VectorToString(const float vector[3], char[] string, int length)
 {
 	Format(string, length, "%f %f %f", vector[0], vector[1], vector[2]);
-}
-
-stock bool IsEntityStuck(int entity)
-{
-	float mins[3], maxs[3], origin[3];
-	GetEntPropVector(entity, Prop_Send, "m_vecMins", mins);
-	GetEntPropVector(entity, Prop_Send, "m_vecMaxs", maxs);
-	GetEntPropVector(entity, Prop_Send, "m_vecOrigin", origin);
-	
-	TR_TraceHullFilter(origin, origin, mins, maxs, MASK_SOLID, Trace_DontHitEntity, entity);
-	return TR_DidHit();
-}
-
-stock bool UnstuckEntity(int entity)
-{
-	if (!IsEntityStuck(entity))
-		return true;
-	
-	float mins[3], maxs[3], origin[3];
-	GetEntPropVector(entity, Prop_Send, "m_vecMins", mins);
-	GetEntPropVector(entity, Prop_Send, "m_vecMaxs", maxs);
-	GetEntPropVector(entity, Prop_Send, "m_vecOrigin", origin);
-	
-	float oldOrigin[3];
-	oldOrigin = origin;
-	
-	do
-	{
-		float test[3];
-		float direction[3];
-		for (int x = -1; x <= 1; x+= 2)
-		{
-			test[0] = origin[0] + (x == -1 ? mins[0] : maxs[0]);
-			
-			for (int y = -1; y <= 1; y+= 2)
-			{
-				test[1] = origin[1] + (y == -1 ? mins[1] : maxs[1]);
-				
-				for (int z = -1; z <= 1; z+= 2)
-				{
-					test[2] = origin[2] + (z == -1 ? mins[2] : maxs[2]);
-					
-					if (TR_GetPointContents(test) & MASK_SOLID)
-					{
-						direction[0] -= float(x);
-						direction[1] -= float(y);
-						direction[2] -= float(z);
-					}
-				}
-			}
-		}
-		
-		if (!direction[0] && !direction[1] && !direction[2])
-		{
-			//All corners is solid or not solid, cant find way to unstuck
-			return false;
-		}
-		
-		float newOrigin[3];
-		AddVectors(origin, direction, newOrigin);
-		
-		//Teleporting in infinite loop, escape
-		if (oldOrigin[0] == newOrigin[0] && oldOrigin[1] == newOrigin[1] && oldOrigin[2] == newOrigin[2])
-			return false;
-		
-		oldOrigin = origin;
-		origin = newOrigin;
-		TeleportEntity(entity, origin, NULL_VECTOR, NULL_VECTOR);
-	}
-	while (IsEntityStuck(entity));
-	
-	return true;
-}
-
-stock int GetClientPointVisible(int client, float distance)
-{
-	float origin[3], angles[3], end[3];
-	GetClientEyePosition(client, origin);
-	GetClientEyeAngles(client, angles);
-	
-	Handle trace = TR_TraceRayFilterEx(origin, angles, MASK_SOLID, RayType_Infinite, Trace_DontHitEntity, client);
-	TR_GetEndPosition(end, trace);
-	
-	int val = -1;
-	int entity = TR_GetEntityIndex(trace);
-	
-	if (TR_DidHit(trace) && entity != client && GetVectorDistance(origin, end) < distance)
-		val = entity;
-	
-	delete trace;
-	return val;
-}
-
-stock bool GetWaterHeightFromEntity(int entity, float &height)
-{
-	float origin[3], angles[3], end[3];
-	GetEntPropVector(entity, Prop_Send, "m_vecOrigin", origin);
-	
-	//Get highest point from above entity
-	angles = view_as<float>({ -90.0, 0.0, 0.0 });
-	Handle trace = TR_TraceRayFilterEx(origin, angles, MASK_SOLID, RayType_Infinite, Trace_OnlyHitWorld);
-	if (!TR_DidHit(trace))
-	{
-		delete trace;
-		return false;
-	}
-	
-	TR_GetEndPosition(end, trace);
-	delete trace;
-	
-	//Use point to find highest water point below
-	angles = view_as<float>({ 90.0, 0.0, 0.0 });
-	trace = TR_TraceRayEx(end, angles, MASK_WATER, RayType_Infinite);
-	if (!TR_DidHit(trace))
-	{
-		delete trace;
-		return false;
-	}
-	
-	TR_GetEndPosition(end, trace);
-	delete trace;
-	
-	//Calculate distance between highest water point to entity
-	height = end[2] - origin[2];
-	return true;
 }
 
 stock void CreateFade(int client, int duration = 1000, int r = 255, int g = 255, int b = 255, int a = 255)
@@ -287,16 +120,13 @@ stock void ShowKeyHintText(int client, const char[] format, any ...)
 
 stock void WorldSpaceCenter(int entity, float[3] buffer)
 {
-	float origin[3], angles[3], mins[3], maxs[3], offset[3];
+	float origin[3], mins[3], maxs[3], offset[3];
 	GetEntPropVector(entity, Prop_Data, "m_vecAbsOrigin", origin);
-	GetEntPropVector(entity, Prop_Data, "m_angRotation", angles);
 	GetEntPropVector(entity, Prop_Data, "m_vecMins", mins);
 	GetEntPropVector(entity, Prop_Data, "m_vecMaxs", maxs);
 	
 	AddVectors(mins, maxs, offset);
 	ScaleVector(offset, 0.5);
-	RotateVector(offset, angles, offset);
-	
 	AddVectors(origin, offset, buffer);
 }
 
@@ -329,6 +159,21 @@ stock bool MoveEntityToClientEye(int entity, int client, int mask = MASK_PLAYERS
 	return true;
 }
 
+stock Address GetServerVehicle(int vehicle)
+{
+	static int offset = -1;
+	if (offset == -1)
+		FindDataMapInfo(vehicle, "m_pServerVehicle", _, _, offset);
+	
+	if (offset == -1)
+	{
+		LogError("Unable to find offset 'm_pServerVehicle'");
+		return Address_Null;
+	}
+	
+	return view_as<Address>(GetEntData(vehicle, offset));
+}
+
 stock void DropSingleInstance(int entity, int owner, float[3] launchVel = NULL_VECTOR)
 {
 	SetEntProp(entity, Prop_Data, "m_spawnflags", GetEntProp(entity, Prop_Data, "m_spawnflags") | SF_NORESPAWN);
@@ -342,6 +187,38 @@ stock void DropSingleInstance(int entity, int owner, float[3] launchVel = NULL_V
 	DispatchKeyValueFloat(entity, "nextthink", 0.1);
 	
 	TeleportEntity(entity, NULL_VECTOR, NULL_VECTOR, launchVel);
+}
+
+public void AddModelToDownloadsTable(const char[] model)
+{
+	AddFileToDownloadsTable(model);
+	
+	char basePath[PLATFORM_MAX_PATH], fullPath[PLATFORM_MAX_PATH];
+	
+	Format(basePath, sizeof(basePath), model);
+	SplitString(basePath, ".mdl", basePath, sizeof(basePath));
+	
+	Format(fullPath, sizeof(fullPath), "%s.dx80.vtx", basePath);
+	AddFileToDownloadsTable(fullPath);
+	
+	Format(fullPath, sizeof(fullPath), "%s.dx90.vtx", basePath);
+	AddFileToDownloadsTable(fullPath);
+	
+	Format(fullPath, sizeof(fullPath), "%s.phy", basePath);
+	AddFileToDownloadsTable(fullPath);
+	
+	Format(fullPath, sizeof(fullPath), "%s.sw.vtx", basePath);
+	AddFileToDownloadsTable(fullPath);
+	
+	Format(fullPath, sizeof(fullPath), "%s.vvd", basePath);
+	AddFileToDownloadsTable(fullPath);
+}
+
+public void AddSoundToDownloadsTable(const char[] sound)
+{
+	char fullPath[PLATFORM_MAX_PATH];
+	Format(fullPath, sizeof(fullPath), "sound/%s", sound);
+	AddFileToDownloadsTable(fullPath);
 }
 
 public bool Trace_DontHitEntity(int entity, int mask, any data)
@@ -392,7 +269,9 @@ stock bool TF2_IsObjectFriendly(int obj, int entity)
 {
 	if (0 < entity <= MaxClients)
 	{
-		if (GetEntPropEnt(obj, Prop_Send, "m_hBuilder") == entity)
+		if (GetEntPropEnt(obj, Prop_Send, "m_hBuilder") == entity)	//obj_dispenser
+			return true;
+		else if (GetEntPropEnt(obj, Prop_Data, "m_hParent") == entity)	//pd_dispenser
 			return true;
 	}
 	else if (entity > MaxClients)
@@ -557,14 +436,33 @@ stock bool TF2_TryToPickupDroppedWeapon(int client)
 	int weaponOld, pos;
 	while (TF2_GetItem(client, weaponOld, pos))
 	{
-		if (slot == TF2_GetSlot(weaponOld) && TF2_ShouldDropWeapon(client, weaponOld))
+		if (slot == WeaponSlot_Melee && GetEntProp(weaponOld, Prop_Send, "m_iItemDefinitionIndex") == INDEX_FISTS)
 		{
-			TF2_CreateDroppedWeapon(client, weaponOld, true, origin, angles);
 			TF2_RemoveItem(client, weaponOld);
+			continue;
 		}
-		else if (slot == WeaponSlot_Melee && GetEntProp(weaponOld, Prop_Send, "m_iItemDefinitionIndex") == INDEX_FISTS)
+		
+		if (!TF2_ShouldDropWeapon(client, weaponOld))
+			continue;
+		
+		if (!fr_multiwearable.BoolValue)
 		{
-			TF2_RemoveItem(client, weaponOld);
+			if (slot == TF2_GetSlot(weaponOld))
+			{
+				TF2_CreateDroppedWeapon(client, weaponOld, true, origin, angles);
+				TF2_RemoveItem(client, weaponOld);
+			}
+		}
+		else
+		{
+			//Because parachute is a "weapon", use mask to determe if its not a wearable (mask as 0)
+			int mask = TF2Econ_GetItemEquipRegionMask(defindex);
+			int maskOld = TF2Econ_GetItemEquipRegionMask(GetEntProp(weaponOld, Prop_Send, "m_iItemDefinitionIndex"));
+			if ((!mask && !maskOld && slot == TF2_GetSlot(weaponOld)) || (mask & maskOld))
+			{
+				TF2_CreateDroppedWeapon(client, weaponOld, true, origin, angles);
+				TF2_RemoveItem(client, weaponOld);
+			}
 		}
 	}
 	
@@ -736,33 +634,35 @@ stock int TF2_CreateWeapon(int defindex, const char[] classnameTemp = NULL_STRIN
 	}
 	
 	int weapon = CreateEntityByName(classname);
-	if (IsValidEntity(weapon))
+	if (weapon == INVALID_ENT_REFERENCE)
 	{
-		SetEntProp(weapon, Prop_Send, "m_iItemDefinitionIndex", defindex);
-		SetEntProp(weapon, Prop_Send, "m_bInitialized", 1);
-		
-		SetEntProp(weapon, Prop_Send, "m_iEntityQuality", 6);
-		SetEntProp(weapon, Prop_Send, "m_iEntityLevel", 1);
-		
-		if (sapper)
-		{
-			SetEntProp(weapon, Prop_Send, "m_iObjectType", TFObject_Sapper);
-			SetEntProp(weapon, Prop_Data, "m_iSubType", TFObject_Sapper);
-		}
-		
-		//Fix extra wearable visibility by replacing INVALID_ITEM_ID (-1) to 0
-		char netClass[32];
-		GetEntityNetClass(weapon, netClass, sizeof(netClass));
-		int offset = FindSendPropInfo(netClass, "m_iItemIDHigh");
-		
-		SetEntData(weapon, offset - 8, 0);	// m_iItemID
-		SetEntData(weapon, offset - 4, 0);	// m_iItemID
-		SetEntData(weapon, offset, 0);	// m_iItemIDHigh
-		SetEntData(weapon, offset + 4, 0);	// m_iItemIDLow
-		
-		DispatchSpawn(weapon);
+		LogError("Unable to create weapon defindex '%d' by classname '%s'", defindex, classname);
+		return INVALID_ENT_REFERENCE;
 	}
 	
+	SetEntProp(weapon, Prop_Send, "m_iItemDefinitionIndex", defindex);
+	SetEntProp(weapon, Prop_Send, "m_bInitialized", 1);
+	
+	SetEntProp(weapon, Prop_Send, "m_iEntityQuality", 6);
+	SetEntProp(weapon, Prop_Send, "m_iEntityLevel", 1);
+	
+	if (sapper)
+	{
+		SetEntProp(weapon, Prop_Send, "m_iObjectType", TFObject_Sapper);
+		SetEntProp(weapon, Prop_Data, "m_iSubType", TFObject_Sapper);
+	}
+	
+	//Fix extra wearable visibility by replacing INVALID_ITEM_ID (-1) to 0
+	char netClass[32];
+	GetEntityNetClass(weapon, netClass, sizeof(netClass));
+	int offset = FindSendPropInfo(netClass, "m_iItemIDHigh");
+	
+	SetEntData(weapon, offset - 8, 0);	// m_iItemID
+	SetEntData(weapon, offset - 4, 0);	// m_iItemID
+	SetEntData(weapon, offset, 0);	// m_iItemIDHigh
+	SetEntData(weapon, offset + 4, 0);	// m_iItemIDLow
+	
+	DispatchSpawn(weapon);
 	return weapon;
 }
 
@@ -803,7 +703,10 @@ stock int TF2_CreateDroppedWeapon(int client, int fromWeapon, bool swap, const f
 	//Dropped weapon doesn't like being spawn high in air, create on ground then teleport back after DispatchSpawn
 	TR_TraceRayFilter(origin, view_as<float>({ 90.0, 0.0, 0.0 }), MASK_SOLID, RayType_Infinite, Trace_OnlyHitWorld);
 	if (!TR_DidHit())	//Outside of map
+	{
+		LogError("Attempted to create dropped weapon while outside of map");
 		return INVALID_ENT_REFERENCE;
+	}
 	
 	float originSpawn[3];
 	TR_GetEndPosition(originSpawn);
@@ -836,14 +739,17 @@ stock int TF2_CreateDroppedWeapon(int client, int fromWeapon, bool swap, const f
 	delete droppedWeapons;
 	
 	if (droppedWeapon == INVALID_ENT_REFERENCE)
+	{
+		LogError("Unable to create dropped weapon with model '%s' and defindex '%d'", model, index);
 		return INVALID_ENT_REFERENCE;
+	}
 	
 	DispatchSpawn(droppedWeapon);
 	
 	//Check if weapon is not marked for deletion after spawn, otherwise we may get bad physics model leading to a crash
 	if (GetEntProp(droppedWeapon, Prop_Data, "m_iEFlags") & EFL_KILLME)
 	{
-		LogError("Unable to create dropped weapon with model '%s' and def index '%d'", model, index);
+		LogError("Dropped weapon created with model '%s' and defindex '%d' may have bad physics model due to mark for deletion", model, index);
 		return INVALID_ENT_REFERENCE;
 	}
 	
@@ -1029,15 +935,6 @@ stock void TF2_RemoveItem(int client, int weapon)
 	if (iExtraWearable != -1)
 		TF2_RemoveWearable(client, iExtraWearable);
 	
-	char classname[256];
-	GetEntityClassname(weapon, classname, sizeof(classname));
-	if (StrEqual(classname, "tf_weapon_medigun"))
-	{
-		//Remove self-heal due to DHook_StopHealingOwnerPre fix
-		SetEntProp(weapon, Prop_Send, "m_bChargeRelease", false);
-		SDKCall_StopHealingOwner(weapon);
-	}
-	
 	RemovePlayerItem(client, weapon);
 	RemoveEntity(weapon);
 }
@@ -1208,3 +1105,14 @@ public Action Glow_SetTransmit(int glow, int client)
 	
 	return Plugin_Handled;
 }
+
+stock int CountCharInString(const char[] string, char letter) 
+{
+	int i, count;
+	
+	while (string[i] != '\0') 
+		if (string[i++] == letter)
+			count++;
+	
+	return count;
+} 

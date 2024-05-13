@@ -130,20 +130,13 @@ public Action Console_VoiceMenu(int client, const char[] command, int args)
 	GetCmdArg(1, arg1, sizeof(arg1));
 	GetCmdArg(2, arg2, sizeof(arg2));
 	
-	if (arg1[0] == '0' && arg2[0] == '0')
+	if (arg1[0] == '0' && arg2[0] == '0')	//MEDIC!
 	{
 		if (TF2_TryToPickupDroppedWeapon(client))
 			return Plugin_Handled;
 		
-		//Entering and exiting vehicles
-		if (FRPlayer(client).LastVehicleEnterTime < GetGameTime() - 1.0)
-		{
-			Vehicle vehicle;
-			if (Vehicles_GetByClient(client, vehicle))
-				Vehicles_ExitVehicle(client);
-			else
-				Vehicles_TryToEnterVehicle(client);
-		}
+		FRPlayer(client).InUse = true;
+		return Plugin_Handled;
 	}
 	
 	return Plugin_Continue;
@@ -161,6 +154,10 @@ public Action Console_DropItem(int client, const char[] command, int args)
 	for (int i = 0; i < sizeof(g_RuneConds); i++)
 		if (TF2_IsPlayerInCondition(client, g_RuneConds[i]))
 			return Plugin_Continue;
+	
+	//Drop item if the player has one
+	if (GetEntPropEnt(client, Prop_Send, "m_hItem") != -1)
+		return Plugin_Continue;
 	
 	//The following will be dropped (in that order):
 	//- current active weapon

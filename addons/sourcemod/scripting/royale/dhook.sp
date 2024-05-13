@@ -33,6 +33,7 @@ enum ThinkFunction
 	ThinkFunction_TossJarThink,
 }
 
+static DynamicHook g_DHookShouldCollide;
 static DynamicHook g_DHookGetMaxHealth;
 static DynamicHook g_DHookForceRespawn;
 static DynamicHook g_DHookGiveNamedItem;
@@ -40,8 +41,12 @@ static DynamicHook g_DHookGrenadeExplode;
 static DynamicHook g_DHookFireballExplode;
 static DynamicHook g_DHookGetLiveTime;
 static DynamicHook g_DHookStartBuilding;
+static DynamicHook g_DHookGetBaseHealth;
+static DynamicHook g_DHookSetPassenger;
+static DynamicHook g_DHookIsPassengerVisible;
 
 static int g_HookIdGiveNamedItem[TF_MAXPLAYERS + 1];
+static int g_HookIdShouldCollidePre[TF_MAXPLAYERS + 1];
 static int g_HookIdGetMaxHealthPre[TF_MAXPLAYERS + 1];
 static int g_HookIdGetMaxHealthPost[TF_MAXPLAYERS + 1];
 static int g_HookIdForceRespawnPre[TF_MAXPLAYERS + 1];
@@ -57,12 +62,11 @@ void DHook_Init(GameData gamedata)
 	DHook_CreateDetour(gamedata, "CBaseEntity::PhysicsDispatchThink", DHook_PhysicsDispatchThinkPre, DHook_PhysicsDispatchThinkPost);
 	DHook_CreateDetour(gamedata, "CBaseEntity::InSameTeam", DHook_InSameTeamPre, _);
 	DHook_CreateDetour(gamedata, "CTFDroppedWeapon::Create", DHook_CreatePre, _);
-	DHook_CreateDetour(gamedata, "CTFPlayer::GetChargeEffectBeingProvided", DHook_GetChargeEffectBeingProvidedPre, DHook_GetChargeEffectBeingProvidedPost);
-	DHook_CreateDetour(gamedata, "CTFPlayerShared::RecalculateChargeEffects", DHook_RecalculateChargeEffectsPre, _);
-	DHook_CreateDetour(gamedata, "CWeaponMedigun::StopHealingOwner", DHook_StopHealingOwnerPre, _);
 	DHook_CreateDetour(gamedata, "CEyeballBoss::FindClosestVisibleVictim", DHook_FindClosestVisibleVictimPre, DHook_FindClosestVisibleVictimPost);
 	DHook_CreateDetour(gamedata, "CLagCompensationManager::StartLagCompensation", DHook_StartLagCompensationPre, DHook_StartLagCompensationPost);
+	DHook_CreateDetour(gamedata, "CTFPlayerMove::SetupMove", DHook_SetupMovePre, _);
 	
+	g_DHookShouldCollide = DHook_CreateVirtual(gamedata, "CBaseEntity::ShouldCollide");
 	g_DHookGetMaxHealth = DHook_CreateVirtual(gamedata, "CBaseEntity::GetMaxHealth");
 	g_DHookForceRespawn = DHook_CreateVirtual(gamedata, "CBasePlayer::ForceRespawn");
 	g_DHookGiveNamedItem = DHook_CreateVirtual(gamedata, "CTFPlayer::GiveNamedItem");
@@ -70,6 +74,9 @@ void DHook_Init(GameData gamedata)
 	g_DHookFireballExplode = DHook_CreateVirtual(gamedata, "CTFProjectile_SpellFireball::Explode");
 	g_DHookGetLiveTime = DHook_CreateVirtual(gamedata, "CTFGrenadePipebombProjectile::GetLiveTime");
 	g_DHookStartBuilding = DHook_CreateVirtual(gamedata, "CBaseObject::StartBuilding");
+	g_DHookGetBaseHealth = DHook_CreateVirtual(gamedata, "CBaseObject::GetBaseHealth");
+	g_DHookSetPassenger = DHook_CreateVirtual(gamedata, "CBaseServerVehicle::SetPassenger");
+	g_DHookIsPassengerVisible = DHook_CreateVirtual(gamedata, "CBaseServerVehicle::IsPassengerVisible");
 }
 
 static void DHook_CreateDetour(GameData gamedata, const char[] name, DHookCallback callbackPre = INVALID_FUNCTION, DHookCallback callbackPost = INVALID_FUNCTION)
@@ -95,7 +102,7 @@ static DynamicHook DHook_CreateVirtual(GameData gamedata, const char[] name)
 	DynamicHook hook = DynamicHook.FromConf(gamedata, name);
 	if (!hook)
 		LogError("Failed to create virtual: %s", name);
-
+	
 	return hook;
 }
 
@@ -161,6 +168,7 @@ bool DHook_IsGiveNamedItemActive()
 
 void DHook_HookClient(int client)
 {
+	g_HookIdShouldCollidePre[client] = g_DHookShouldCollide.HookEntity(Hook_Pre, client, DHook_ShouldCollidePre);
 	g_HookIdGetMaxHealthPre[client] = g_DHookGetMaxHealth.HookEntity(Hook_Pre, client, DHook_GetMaxHealthPre);
 	g_HookIdGetMaxHealthPost[client] = g_DHookGetMaxHealth.HookEntity(Hook_Post, client, DHook_GetMaxHealthPost);
 	g_HookIdForceRespawnPre[client] = g_DHookForceRespawn.HookEntity(Hook_Pre, client, DHook_ForceRespawnPre);
@@ -169,10 +177,17 @@ void DHook_HookClient(int client)
 
 void DHook_UnhookClient(int client)
 {
+	DynamicHook.RemoveHook(g_HookIdShouldCollidePre[client]);
 	DynamicHook.RemoveHook(g_HookIdGetMaxHealthPre[client]);
 	DynamicHook.RemoveHook(g_HookIdGetMaxHealthPost[client]);
 	DynamicHook.RemoveHook(g_HookIdForceRespawnPre[client]);
 	DynamicHook.RemoveHook(g_HookIdForceRespawnPost[client]);
+}
+
+void DHook_HookVehicle(int vehicle)
+{
+	g_DHookSetPassenger.HookRaw(Hook_Pre, GetServerVehicle(vehicle), DHook_SetPassengerPre);
+	g_DHookIsPassengerVisible.HookRaw(Hook_Post, GetServerVehicle(vehicle), DHook_IsPassengerVisiblePre);
 }
 
 void DHook_OnEntityCreated(int entity, const char[] classname)
@@ -192,10 +207,15 @@ void DHook_OnEntityCreated(int entity, const char[] classname)
 		g_DHookGetLiveTime.HookEntity(Hook_Pre, entity, DHook_GetLiveTimePre);
 		g_DHookGetLiveTime.HookEntity(Hook_Post, entity, DHook_GetLiveTimePost);
 	}
+	else if (StrEqual(classname, "tf_projectile_syringe"))
+	{
+		g_DHookShouldCollide.HookEntity(Hook_Pre, entity, DHook_ShouldCollidePre);
+	}
 	else if (StrContains(classname, "obj_") == 0)
 	{
 		g_DHookStartBuilding.HookEntity(Hook_Pre, entity, DHook_StartBuildingPre);
 		g_DHookStartBuilding.HookEntity(Hook_Post, entity, DHook_StartBuildingPost);
+		g_DHookGetBaseHealth.HookEntity(Hook_Post, entity, DHook_GetBaseHealthPost);
 	}
 }
 
@@ -216,7 +236,7 @@ public MRESReturn DHook_PhysicsDispatchThinkPre(int entity)
 		//Vampire powerup heals owner on damaging building
 		GameRules_SetProp("m_bPowerupMode", true);
 	}
-	else if (StrEqual(classname, "obj_dispenser"))
+	else if (StrEqual(classname, "obj_dispenser") || StrEqual(classname, "pd_dispenser"))
 	{
 		if (!GetEntProp(entity, Prop_Send, "m_bPlacing") && !GetEntProp(entity, Prop_Send, "m_bBuilding") && SDKCall_GetNextThink(entity, "DispenseThink") == TICK_NEVER_THINK)	// CObjectDispenser::DispenseThink
 		{
@@ -279,7 +299,6 @@ public MRESReturn DHook_PhysicsDispatchThinkPre(int entity)
 		//eyeball_boss uses InSameTeam check but obj_sentrygun owner is itself
 		SetEntPropEnt(entity, Prop_Send, "m_hOwnerEntity", GetEntPropEnt(entity, Prop_Send, "m_hBuilder"));
 	}
-	
 	else if (StrEqual(classname, "player"))
 	{
 		if (IsPlayerAlive(entity) && SDKCall_GetNextThink(entity, "RegenThink") == TICK_NEVER_THINK)	// CTFPlayer::RegenThink
@@ -290,7 +309,6 @@ public MRESReturn DHook_PhysicsDispatchThinkPre(int entity)
 			FRPlayer(entity).ChangeToUnknown();
 		}
 	}
-	
 	else if (StrEqual(classname, "tf_weapon_spellbook"))	// CTFJar::TossJarThink
 	{
 		g_ThinkFunction = ThinkFunction_TossJarThink;
@@ -400,58 +418,6 @@ public MRESReturn DHook_CreatePre(DHookReturn ret, DHookParam param)
 	return MRES_Ignored;
 }
 
-public MRESReturn DHook_GetChargeEffectBeingProvidedPre(int client)
-{
-	if (!IsClientInGame(client))
-		return;
-	
-	//Allow return medigun effects while client switched away from active weapon
-	int medigun = TF2_GetItemByClassname(client, "tf_weapon_medigun");
-	if (medigun != -1)
-	{
-		FRPlayer(client).ActiveWeapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
-		SetEntProp(medigun, Prop_Send, "m_bHolstered", false);
-		SetEntPropEnt(client, Prop_Send, "m_hActiveWeapon", medigun);
-	}
-}
-
-public MRESReturn DHook_GetChargeEffectBeingProvidedPost(int client)
-{
-	if (!IsClientInGame(client))
-		return;
-	
-	int medigun = TF2_GetItemByClassname(client, "tf_weapon_medigun");
-	if (medigun != -1)
-	{
-		SetEntProp(medigun, Prop_Send, "m_bHolstered", GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon") != FRPlayer(client).ActiveWeapon);
-		SetEntPropEnt(client, Prop_Send, "m_hActiveWeapon", FRPlayer(client).ActiveWeapon);
-	}
-}
-
-public MRESReturn DHook_RecalculateChargeEffectsPre(Address shared, DHookParam param)
-{
-	//Prevent Vaccinator uber condition being removed on medigun holster
-	if (g_WeaponSwitch)
-	{
-		param.Set(1, false);	//bInstantRemove
-		return MRES_ChangedOverride;
-	}
-	
-	return MRES_Ignored;
-}
-
-public MRESReturn DHook_StopHealingOwnerPre(int medigun)
-{
-	if (medigun == -1)	//this happens
-		return MRES_Ignored;
-	
-	//Dont remove self heals while still ubered, so quick-fix heal can apply while switched out
-	if (GetEntProp(medigun, Prop_Send, "m_bChargeRelease"))
-		return MRES_Supercede;
-	
-	return MRES_Ignored;
-}
-
 public MRESReturn DHook_FindClosestVisibleVictimPre(int eyeball)
 {
 	//This function only targets one team, red or blu team
@@ -527,13 +493,40 @@ public MRESReturn DHook_StartLagCompensationPost(Address manager, DHookParam par
 	FRPlayer(client).ChangeToTeam();
 }
 
+public MRESReturn DHook_SetupMovePre(DHookParam param)
+{
+	int client = param.Get(1);
+	
+	int vehicle = GetEntPropEnt(client, Prop_Send, "m_hVehicle");
+	if (vehicle != INVALID_ENT_REFERENCE)
+	{
+		Address ucmd = param.Get(2);
+		Address helper = param.Get(3);
+		Address move = param.Get(4);
+		
+		SDKCall_VehicleSetupMove(vehicle, client, ucmd, helper, move);
+	}
+}
+
+public MRESReturn DHook_ShouldCollidePre(int client, DHookReturn ret, DHookParam param)
+{
+	int contentsmask = param.Get(2);
+	if (contentsmask & CONTENTS_REDTEAM || contentsmask & CONTENTS_BLUETEAM)
+	{
+		ret.Value = true;
+		return MRES_Supercede;
+	}
+	
+	return MRES_Ignored;
+}
+
 public MRESReturn DHook_GetMaxHealthPre(int client)
 {
 	//Hooks may be changing client class, change class back to what it was
 	FRPlayer(client).ChangeToClass();
 }
 
-public MRESReturn DHook_GetMaxHealthPost(int client, DHookReturn ret)
+public MRESReturn DHook_GetMaxHealthPost(int client)
 {
 	FRPlayer(client).ChangeToUnknown();
 }
@@ -553,7 +546,7 @@ public MRESReturn DHook_ForceRespawnPre(int client)
 	
 	//If player havent selected a class, pick random class for em
 	//this is so that player can actually spawn into map, otherwise nothing happens
-	if (view_as<TFClassType>(GetEntProp(client, Prop_Send, "m_iDesiredPlayerClass")) == TFClass_Unknown)
+	if (fr_randomclass.BoolValue || view_as<TFClassType>(GetEntProp(client, Prop_Send, "m_iDesiredPlayerClass")) == TFClass_Unknown)
 		SetEntProp(client, Prop_Send, "m_iDesiredPlayerClass", GetRandomInt(view_as<int>(TFClass_Scout), view_as<int>(TFClass_Engineer)));
 	
 	return MRES_Ignored;
@@ -659,4 +652,30 @@ public MRESReturn DHook_StartBuildingPre(int entity)
 public MRESReturn DHook_StartBuildingPost(int entity)
 {
 	GameRules_SetProp("m_bPowerupMode", false);
+}
+
+public MRESReturn DHook_GetBaseHealthPost(int entity, DHookReturn ret)
+{
+	ret.Value = fr_obj_health[TF2_GetObjectType(entity)].IntValue;
+	return MRES_Supercede;
+}
+
+public MRESReturn DHook_SetPassengerPre(Address vehicle, DHookParam params)
+{
+	if (!params.IsNull(2))
+	{
+		SetEntProp(params.Get(2), Prop_Data, "m_bDrawViewmodel", false);
+	}
+	else
+	{
+		int client = SDKCall_GetDriver(vehicle);
+		if (client != -1)
+			SetEntProp(client, Prop_Data, "m_bDrawViewmodel", true);
+	}
+}
+
+public MRESReturn DHook_IsPassengerVisiblePre(Address vehicle, DHookReturn ret)
+{
+	ret.Value = true;
+	return MRES_Supercede;
 }

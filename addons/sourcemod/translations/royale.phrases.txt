@@ -70,6 +70,21 @@
 		"en"		"Editor Prefabs"
 	}
 	
+	"Hint_VehicleKeys_Car"
+	{
+		"en"		"%%+speed%% TURBO %%+jump%% HANDBRAKE"
+	}
+	
+	"Hint_VehicleKeys_Airboat"
+	{
+		"en"		"%%+forward%% SPEED UP %%+back%% SLOW DOWN %%+moveleft%% TURN LEFT %%+moveright%% TURN RIGHT"
+	}
+	
+	"Hint_BottlePickup_WrongClass"
+	{
+		"en"		"You need to be a Demoman to pick this up!"
+	}
+	
 	"RoundState_NoWinner"
 	{
 		"en"		"Stalemate! You are all losers!"
@@ -88,19 +103,6 @@
 	{
 		"#format"	"{1:s},{2:N},{3:d}"
 		"en"		"{1} and {2} are the top killers with {3} elimination(s) this round!"
-	}
-	
-	"Vehicle_HowToEnter"
-	{
-		"en"		"%%voicemenu 0 0%% TO ENTER VEHICLE"
-	}
-	"Vehicle_HowToExit"
-	{
-		"en"		"%%voicemenu 0 0%% TO EXIT VEHICLE"
-	}
-	"Vehicle_OutOfFuel"
-	{
-		"en"		"Out of Fuel"
 	}
 	
 	"Zone_ShrinkAlert"

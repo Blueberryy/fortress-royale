@@ -29,6 +29,8 @@ static char g_SpectatorClassnames[][] = {
 	"tf_weapon_rocketlauncher_fireball",//CBaseCombatWeapon::SecondaryAttack
 	"tf_weapon_sniperrifle",			//CTFPlayer::FireBullet
 	"tf_weapon_knife",					//CTFKnife::PrimaryAttack
+	"tf_weapon_fists",					//CTFWeaponBaseMelee::DoMeleeDamage
+	"tf_weapon_stickbomb",				//CTFStickBomb::Smack
 };
 
 static char g_EnemyTeamClassnames[][] = {
@@ -42,8 +44,6 @@ static bool g_PostThinkMelee;
 
 void SDKHook_HookClient(int client)
 {
-	SDKHook(client, SDKHook_ShouldCollide, Entity_ShouldCollide);
-	
 	SDKHook(client, SDKHook_SetTransmit, Client_SetTransmit);
 	SDKHook(client, SDKHook_OnTakeDamage, Client_OnTakeDamage);
 	SDKHook(client, SDKHook_OnTakeDamagePost, Client_OnTakeDamagePost);
@@ -53,14 +53,10 @@ void SDKHook_HookClient(int client)
 	SDKHook(client, SDKHook_PostThinkPost, Client_PostThinkPost);
 	SDKHook(client, SDKHook_Touch, Client_Touch);
 	SDKHook(client, SDKHook_TouchPost, Client_TouchPost);
-	SDKHook(client, SDKHook_WeaponSwitch, Client_WeaponSwitch);
-	SDKHook(client, SDKHook_WeaponSwitchPost, Client_WeaponSwitchPost);
 }
 
 void SDKHook_UnhookClient(int client)
 {
-	SDKUnhook(client, SDKHook_ShouldCollide, Entity_ShouldCollide);
-	
 	SDKUnhook(client, SDKHook_SetTransmit, Client_SetTransmit);
 	SDKUnhook(client, SDKHook_OnTakeDamage, Client_OnTakeDamage);
 	SDKUnhook(client, SDKHook_OnTakeDamagePost, Client_OnTakeDamagePost);
@@ -70,8 +66,6 @@ void SDKHook_UnhookClient(int client)
 	SDKUnhook(client, SDKHook_PostThinkPost, Client_PostThinkPost);
 	SDKUnhook(client, SDKHook_Touch, Client_Touch);
 	SDKUnhook(client, SDKHook_TouchPost, Client_TouchPost);
-	SDKUnhook(client, SDKHook_WeaponSwitch, Client_WeaponSwitch);
-	SDKUnhook(client, SDKHook_WeaponSwitchPost, Client_WeaponSwitchPost);
 }
 
 void SDKHook_OnEntityCreated(int entity, const char[] classname)
@@ -87,15 +81,21 @@ void SDKHook_OnEntityCreated(int entity, const char[] classname)
 	{
 		SDKHook(entity, SDKHook_Spawn, Rune_Spawn);
 	}
-	else if (StrContains(classname, "prop_physics") == 0)
+	else if (StrEqual(classname, "item_teamflag"))
 	{
-		SDKHook(entity, SDKHook_Spawn, PropPhysics_Spawn);
+		SDKHook(entity, SDKHook_StartTouch, CaptureFlag_StartTouch);
+		SDKHook(entity, SDKHook_Touch, CaptureFlag_Touch);
+	}
+	else if (StrContains(classname, "prop_vehicle") == 0)
+	{
+		SDKHook(entity, SDKHook_Spawn, PropVehicle_Spawn);
+		SDKHook(entity, SDKHook_SpawnPost, PropVehicle_SpawnPost);
 	}
 	else if (StrContains(classname, "prop_dynamic") == 0)
 	{
 		SDKHook(entity, SDKHook_SpawnPost, PropDynamic_SpawnPost);
 	}
-	else if (StrEqual(classname, "obj_dispenser"))
+	else if (StrEqual(classname, "obj_dispenser") || StrEqual(classname, "pd_dispenser"))
 	{
 		SDKHook(entity, SDKHook_StartTouch, Dispenser_StartTouch);
 		SDKHook(entity, SDKHook_StartTouchPost, Dispenser_StartTouchPost);
@@ -114,10 +114,6 @@ void SDKHook_OnEntityCreated(int entity, const char[] classname)
 		SDKHook(entity, SDKHook_Touch, Projectile_Touch);
 		SDKHook(entity, SDKHook_TouchPost, Projectile_TouchPost);
 	}
-	else if (StrEqual(classname, "tf_projectile_syringe"))
-	{
-		SDKHook(entity, SDKHook_ShouldCollide, Entity_ShouldCollide);
-	}
 	else if (StrEqual(classname, "tf_pumpkin_bomb"))
 	{
 		SDKHook(entity, SDKHook_OnTakeDamage, PumpkinBomb_OnTakeDamage);
@@ -131,14 +127,6 @@ void SDKHook_OnEntityCreated(int entity, const char[] classname)
 	{
 		SDKHook(entity, SDKHook_TouchPost, SpellPickup_TouchPost);
 	}
-}
-
-public bool Entity_ShouldCollide(int entity, int collisiongroup, int contentsmask, bool originalResult)
-{
-	if (contentsmask & CONTENTS_REDTEAM || contentsmask & CONTENTS_BLUETEAM)
-		return true;
-	
-	return originalResult;
 }
 
 public Action Client_SetTransmit(int entity, int client)
@@ -156,11 +144,7 @@ public Action Client_SetTransmit(int entity, int client)
 
 public Action Client_OnTakeDamage(int victim, int &attacker, int &inflictor, float &damage, int &damagetype, int &weapon, float damageForce[3], float damagePosition[3], int damagecustom)
 {
-	//attacker may be already in spec, change attacker team so we don't get both victim and attacker in spectator
-	if (0 < attacker <= MaxClients && IsClientInGame(attacker))
-		FRPlayer(attacker).ChangeToSpectator();
-	else
-		FRPlayer(victim).ChangeToSpectator();
+	Action action = Plugin_Changed;
 	
 	if (damagecustom == 0 && weapon > MaxClients && HasEntProp(weapon, Prop_Send, "m_iItemDefinitionIndex") && GetEntProp(weapon, Prop_Send, "m_iItemDefinitionIndex") == INDEX_FISTS)
 	{
@@ -168,11 +152,37 @@ public Action Client_OnTakeDamage(int victim, int &attacker, int &inflictor, flo
 		if (multiplier != 1.0)
 		{
 			damage *= multiplier;
-			return Plugin_Changed;
+			action = Plugin_Changed;
 		}
 	}
 	
-	return Plugin_Continue;
+	if (damagetype & DMG_VEHICLE)
+	{
+		char classname[256];
+		GetEntityClassname(inflictor, classname, sizeof(classname));
+		if (StrEqual("prop_vehicle_driveable", classname))
+		{
+			int driver = GetEntPropEnt(inflictor, Prop_Send, "m_hPlayer");
+			if (0 < driver <= MaxClients && victim != driver)
+			{
+				attacker = driver;
+				action = Plugin_Changed;
+			}
+		}
+	}
+	
+	//attacker may be already in spec, change attacker team so we don't get both victim and attacker in spectator
+	if (0 < attacker <= MaxClients && IsClientInGame(attacker))
+		FRPlayer(attacker).ChangeToSpectator();
+	else
+		FRPlayer(victim).ChangeToSpectator();
+	
+	//Don't drop a beer bottle on death if the attacker wasn't a Demoman
+	//Done in OnTakeDamage because a player_death event hook fires too late (after CTFPlayer::Event_Killed)
+	if (!(0 < attacker <= MaxClients && IsClientInGame(attacker)) || TF2_GetPlayerClass(attacker) != TFClass_DemoMan)
+		SetBottlePoints(0);
+	
+	return action;
 }
 
 public void Client_OnTakeDamagePost(int victim, int attacker, int inflictor, float damage, int damagetype, int weapon, const float damageForce[3], const float damagePosition[3], int damagecustom)
@@ -181,6 +191,9 @@ public void Client_OnTakeDamagePost(int victim, int attacker, int inflictor, flo
 		FRPlayer(attacker).ChangeToTeam();
 	else
 		FRPlayer(victim).ChangeToTeam();
+	
+	//Reset any potential changes from pre-hook
+	SetBottlePoints(fr_bottle_points.IntValue);
 }
 
 public void Client_PreThink(int client)
@@ -196,6 +209,12 @@ public void Client_PreThinkPost(int client)
 
 public void Client_PostThink(int client)
 {
+	//For some reason IN_USE never gets assigned to m_afButtonPressed inside vehicles, preventing exiting, so let's add it ourselves
+	if (GetEntPropEnt(client, Prop_Send, "m_hVehicle") && GetClientButtons(client) & IN_USE)
+	{
+		SetEntProp(client, Prop_Data, "m_afButtonPressed", GetEntProp(client, Prop_Data, "m_afButtonPressed") | IN_USE);
+	}
+	
 	int medigun = TF2_GetItemByClassname(client, "tf_weapon_medigun");
 	if (medigun > MaxClients)
 	{
@@ -205,35 +224,12 @@ public void Client_PostThink(int client)
 		SDKCall_FindAndHealTargets(medigun);
 		GameRules_SetProp("m_bPowerupMode", false);
 		SetEntPropEnt(medigun, Prop_Send, "m_hHealingTarget", -1);
-	}
-	
-	if (IsPlayerAlive(client))
-	{
-		static int hintTextMode[TF_MAXPLAYERS+1];
 		
-		if (Vehicles_IsClientInVehicle(client))
+		//Passively build projectile shield
+		if (TF2Attrib_GetByName(medigun, "generate rage on heal") != Address_Null && !GetEntProp(client, Prop_Send, "m_bRageDraining"))
 		{
-			if (hintTextMode[client] != 2)
-			{
-				ShowKeyHintText(client, "%t", "Vehicle_HowToExit");
-				hintTextMode[client] = 2;
-			}
-		}
-		else
-		{
-			int entity = GetClientPointVisible(client, VEHICLE_ENTER_RANGE);
-			if (entity != -1 && Vehicles_IsVehicle(EntIndexToEntRef(entity)))
-			{
-				if (hintTextMode[client] != 1)
-				{
-					ShowKeyHintText(client, "%t", "Vehicle_HowToEnter");
-					hintTextMode[client] = 1;
-				}
-			}
-			else
-			{
-				hintTextMode[client] = 0;
-			}
+			float rage = GetEntPropFloat(client, Prop_Send, "m_flRageMeter");
+			SetEntPropFloat(client, Prop_Send, "m_flRageMeter", fMin(100.0, rage + (GetGameFrameTime() / SDKCall_GetHealRate(medigun)) * 100.0));
 		}
 	}
 	
@@ -266,20 +262,29 @@ public void Client_PostThink(int client)
 		//Mannpower have increased melee damage, and even bigger for knockout powerup
 		GameRules_SetProp("m_bPowerupMode", true);
 		
-		if (GetEntProp(weapon, Prop_Send, "m_iItemDefinitionIndex") == INDEX_FISTS)
+		int building = MaxClients + 1;
+		while ((building = FindEntityByClassname(building, "obj_*")) > MaxClients)
 		{
-			//Dont allow repair and upgrade his building if using bare hands
-			FRPlayer(client).ChangeBuildingsToSpectator();
-			
-			if (StrEqual(classname, "tf_weapon_robot_arm"))
+			if (GetEntPropEnt(building, Prop_Send, "m_hBuilder") != client)
 			{
-				//Dont allow triple combo punch from gunslinger hand
-				static int offsetComboCount = -1;
-				if (offsetComboCount == -1)
-					offsetComboCount = FindSendPropInfo("CTFRobotArm", "m_hRobotArm") + 4;	// m_iComboCount
-				
-				SetEntData(weapon, offsetComboCount, 0);
+				//Move enemy buildings to spectator to deal damage
+				FREntity(building).ChangeToSpectator();
 			}
+			else if (GetEntProp(weapon, Prop_Send, "m_iItemDefinitionIndex") == INDEX_FISTS)
+			{
+				//Dont allow repair and upgrade his building if using bare hands
+				FREntity(building).ChangeToSpectator();
+			}
+		}
+		
+		if (StrEqual(classname, "tf_weapon_robot_arm") && GetEntProp(weapon, Prop_Send, "m_iItemDefinitionIndex") == INDEX_FISTS)
+		{
+			//Dont allow triple combo punch from gunslinger hand
+			static int offsetComboCount = -1;
+			if (offsetComboCount == -1)
+				offsetComboCount = FindSendPropInfo("CTFRobotArm", "m_hRobotArm") + 4;	// m_iComboCount
+			
+			SetEntData(weapon, offsetComboCount, 0);
 		}
 	}
 	
@@ -364,8 +369,21 @@ public void Client_PostThinkPost(int client)
 		GameRules_SetProp("m_bPowerupMode", false);
 		
 		int weapon = GetEntPropEnt(client, Prop_Send, "m_hActiveWeapon");
-		if (weapon != -1 && GetEntProp(weapon, Prop_Send, "m_iItemDefinitionIndex") == INDEX_FISTS)
-			FRPlayer(client).ChangeBuildingsToTeam();
+		
+		int building = MaxClients + 1;
+		while ((building = FindEntityByClassname(building, "obj_*")) > MaxClients)
+		{
+			if (GetEntPropEnt(building, Prop_Send, "m_hBuilder") != client)
+			{
+				//Move enemy buildings to spectator to deal damage
+				FREntity(building).ChangeToTeam();
+			}
+			else if (weapon != INVALID_ENT_REFERENCE && GetEntProp(weapon, Prop_Send, "m_iItemDefinitionIndex") == INDEX_FISTS)
+			{
+				//Dont allow repair and upgrade his building if using bare hands
+				FREntity(building).ChangeToTeam();
+			}
+		}
 	}
 }
 
@@ -385,16 +403,6 @@ public void Client_TouchPost(int client, int toucher)
 		FRPlayer(client).ChangeToTeam();
 		SetEntProp(client, Prop_Send, "m_lifeState", LIFE_ALIVE);
 	}
-}
-
-public void Client_WeaponSwitch(int client, int weapon)
-{
-	g_WeaponSwitch = true;
-}
-
-public void Client_WeaponSwitchPost(int client, int weapon)
-{
-	g_WeaponSwitch = false;
 }
 
 public void Building_SpawnPost(int building)
@@ -441,9 +449,14 @@ public void Projectile_TouchPost(int entity, int other)
 	}
 }
 
-public Action PropPhysics_Spawn(int prop)
+public Action PropVehicle_Spawn(int vehicle)
 {
-	Vehicles_OnEntitySpawned(prop);
+	Vehicles_Spawn(vehicle);
+}
+
+public Action PropVehicle_SpawnPost(int vehicle)
+{
+	Vehicles_SpawnPost(vehicle);
 }
 
 public void PropDynamic_SpawnPost(int prop)
@@ -540,6 +553,28 @@ public Action Rune_Spawn(int rune)
 	
 	//Never let rune despawn
 	SetEntData(rune, g_OffsetRuneShouldReposition, false);
+}
+
+public Action CaptureFlag_StartTouch(int entity, int toucher)
+{
+	char model[PLATFORM_MAX_PATH];
+	if (GetEntPropString(entity, Prop_Data, "m_ModelName", model, sizeof(model)) > 0 && StrEqual(model, BOTTLE_PICKUP_MODEL))
+	{
+		if (0 < toucher <= MaxClients && TF2_GetPlayerClass(toucher) != TFClass_DemoMan && GetEntPropEnt(entity, Prop_Send, "m_hOwnerEntity") == -1)
+			PrintCenterText(toucher, "%t", "Hint_BottlePickup_WrongClass");
+	}
+}
+
+public Action CaptureFlag_Touch(int entity, int toucher)
+{
+	char model[PLATFORM_MAX_PATH];
+	if (GetEntPropString(entity, Prop_Data, "m_ModelName", model, sizeof(model)) > 0 && StrEqual(model, BOTTLE_PICKUP_MODEL))
+	{
+		if (0 < toucher <= MaxClients && TF2_GetPlayerClass(toucher) != TFClass_DemoMan)
+			return Plugin_Handled;
+	}
+	
+	return Plugin_Continue;
 }
 
 public Action MeteorShowerSpawner_Spawn(int entity)
